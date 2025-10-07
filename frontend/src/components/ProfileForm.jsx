@@ -9,6 +9,8 @@ export default function ProfileForm({ onSave }) {
     preferredStyle: "",
     avoid: "",
   });
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
@@ -16,15 +18,34 @@ export default function ProfileForm({ onSave }) {
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    onSave(form);
+    setSaving(true);
+    try {
+      onSave?.(form);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000); // fade the check
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
     <form className="profile-form" onSubmit={handleSubmit}>
-      <h2>🧍‍♀️ Your Style Profile</h2>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <h2 style={{ margin: 0 }}>🧍‍♀️ Your Style Profile</h2>
+        {saved && (
+          <span style={{
+            fontSize: 12, padding: "2px 8px", borderRadius: 999,
+            background: "#eaf7ef", color: "#1f8f55", border: "1px solid #c9e8d3"
+          }}>
+            ✓ Saved
+          </span>
+        )}
+      </div>
+
       <p className="helper-text">
         Tell me a bit about yourself — I’ll personalize your looks just for you ✨
       </p>
+
       <input
         name="bodyType"
         placeholder="Describe your body type (e.g., athletic, curvy, petite)"
@@ -61,8 +82,9 @@ export default function ProfileForm({ onSave }) {
         value={form.avoid}
         onChange={handleChange}
       />
-      <button type="submit" className="btn-primary">
-        Save My Style
+
+      <button type="submit" className="btn-primary" disabled={saving}>
+        {saving ? "Saving…" : "Save My Style"}
       </button>
     </form>
   );
