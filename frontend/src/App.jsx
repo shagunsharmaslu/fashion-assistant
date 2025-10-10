@@ -190,7 +190,7 @@ function App() {
         </div>
         <div className="ux-actions">
           <span className="ux-chip">Gemini</span>
-          <button className="ux-cta" onClick={onAddManualItem}>+ Add your outfit</button>
+          {/*<button className="ux-cta" onClick={onAddManualItem}>+ Add your outfit</button>*/}
         </div>
       </header>
 
@@ -316,7 +316,7 @@ function App() {
                 </div>
 
                 {items.length === 0 ? (
-                  <div className="empty">No items yet. Upload photos or add manually.</div>
+                  <div className="empty">No items yet. Upload photos</div>
                 ) : (
                   <ul className="items-list">
                     {items.map((it) => (
@@ -328,9 +328,9 @@ function App() {
                   </ul>
                 )}
 
-                <button className="btn wide ghost" onClick={onAddManualItem}>
+                {/*<button className="btn wide ghost" onClick={onAddManualItem}>
                   + Add manual item
-                </button>
+                </button>*/}
               </>
             ) : (
               <>
@@ -395,7 +395,7 @@ function Dropdown({ label, value, onChange, options }) {
 function SkeletonCard() {
   return (
     <div className="s-card">
-      <div className="s-media" />
+      <div className="s-media" />}
       <div className="s-line" />
       <div className="s-line short" />
     </div>
@@ -405,8 +405,8 @@ function SkeletonCard() {
 function SuggestionCard({ title, body, tags = [], match = 90, onSave, onFav, favActive }) {
   return (
     <div className="sugg-card">
-      <button className={`fav ${favActive ? "active" : ""}`} onClick={onFav}>♡</button>
-      <div className="media" />
+      
+      
       <div className="sugg-body">
         <div className="sugg-title-row">
           <div className="sugg-title">{title}</div>

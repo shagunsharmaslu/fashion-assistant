@@ -42,7 +42,7 @@ body{margin:0;background:#fff;color:#111;font-family:Inter, ui-sans-serif, syste
 
 /* Upload strip */
 .upload-strip{
-  margin-top:10px;border:2px dashed #e8e8e8;border-radius:14px;padding:16px;
+  margin-top:20px;border:2px dashed #e8e8e8;border-radius:14px;padding:16px;
   display:flex;justify-content:space-between;align-items:center;background:#fafafa
 }
 .u-title{font-weight:600}
@@ -53,7 +53,7 @@ body{margin:0;background:#fff;color:#111;font-family:Inter, ui-sans-serif, syste
 .regen-row{display:flex;justify-content:flex-end;margin:10px 0}
 
 /* Suggestions grid */
-.section-h{margin:10px 0 8px;font-size:16px}
+.section-h{margin:30px 0 8px;font-size:16px}
 .card-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
 .s-card{border:1px solid #eee;border-radius:14px;height:240px;padding:12px;background:#fff}
 .s-media{height:140px;background:#f3f4f6;border-radius:10px;margin-bottom:10px}
