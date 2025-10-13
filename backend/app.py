@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import google.generativeai as genai
 import sqlite3, json, os, re
+import urllib.parse as up
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -34,16 +35,22 @@ def init_db():
 init_db()
 
 def extract_json(text: str):
+    """Best-effort: raw JSON, ```json fenced```, or first balanced object."""
+    if not text:
+        return None
+    # try direct
     try:
         return json.loads(text)
     except Exception:
         pass
+    # try ```json ... ```
     m = re.search(r"```json\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
     if m:
         try:
             return json.loads(m.group(1))
         except Exception:
             pass
+    # try first balanced { ... }
     m = re.search(r"(\{(?:[^{}]|(?1))*\})", text, flags=re.DOTALL)
     if m:
         try:
@@ -52,38 +59,101 @@ def extract_json(text: str):
             pass
     return None
 
+# simple https URL guard
+_URL_RE = re.compile(r"^https://[^\s]+$", re.IGNORECASE)
+
+def _sanitize_links(links):
+    """Keep at most 3 valid https links with short titles/sources."""
+    out = []
+    if isinstance(links, list):
+        for l in links:
+            if not isinstance(l, dict):
+                continue
+            title = (l.get("title") or "Shop").strip()
+            url = (l.get("url") or "").strip()
+            source = (l.get("source") or "").strip()
+            if _URL_RE.match(url):
+                out.append({"title": title[:60], "url": url, "source": source[:60]})
+            if len(out) >= 3:
+                break
+    return out
+
+def build_shop_links(sug: dict) -> list:
+    """
+    Deterministic, reliable retailer SEARCH links based on the suggestion.
+    This avoids LLM-hallucinated deep links that 404.
+    """
+    title = (sug.get("title") or "").strip()
+    desc = (sug.get("suggestion") or "").strip()
+    cats = sug.get("categories") or {}
+    query_bits = [
+        title,
+        cats.get("style") or "",
+        cats.get("event") or "",
+        cats.get("season") or "",
+    ]
+    q = " ".join([b for b in query_bits if b]).strip()
+    if not q:
+        q = " ".join(desc.split()[:8]) or "stylish outfit"
+    q_enc = up.quote_plus(q)
+
+    return [
+        {"title": "ASOS", "source": "ASOS", "url": f"https://www.asos.com/search/?q={q_enc}"},
+        {"title": "Zara", "source": "Zara", "url": f"https://www.zara.com/us/en/search?searchTerm={q_enc}"},
+        {"title": "Uniqlo", "source": "Uniqlo", "url": f"https://www.uniqlo.com/us/en/search?q={q_enc}"},
+        {"title": "Nordstrom", "source": "Nordstrom", "url": f"https://www.nordstrom.com/sr?keyword={q_enc}"},
+        {"title": "Amazon", "source": "Amazon", "url": f"https://www.amazon.com/s?k={q_enc}"},
+        {"title": "Google Shopping", "source": "Google", "url": f"https://www.google.com/search?tbm=shop&q={q_enc}"},
+    ][:3]  # keep top 3 for brevity
+
 def build_prompt(question, profile):
-    # Ask for EXACTLY 3 suggestions as an array
+    # EXACTLY 3 items, each with 1–3 links (we will still sanitize)
     return f"""
 You are a fashion assistant that provides personalized outfit recommendations.
 
 User traits: {json.dumps(profile, ensure_ascii=False)}
 Question: {question}
 
-Return ONLY valid JSON with this exact schema:
+Return ONLY valid JSON with this exact schema (NO markdown, NO extra text):
 {{
   "suggestions": [
     {{
       "title": "short catchy title",
-      "suggestion": "concise outfit description (2-4 sentences, bullet-like, no emojis)",
+      "suggestion": "concise outfit description (2-4 sentences, no emojis)",
       "categories": {{
         "event": "Business Casual",
         "season": "Fall",
         "style": "Minimalist",
         "user_traits": {{"body_type": "Athletic", "skin_tone": "Warm"}}
-      }}
+      }},
+      "links": [
+        {{
+          "title": "Item name or page",
+          "url": "https://example.com/product",
+          "source": "Brand or retailer"
+        }}
+      ]
     }},
-    ... 2 more (total 3)
+    ... 2 more (total EXACTLY 3)
   ]
 }}
-- Exactly 3 items in "suggestions".
-- No extra keys, no markdown, no text outside JSON.
+
+Rules:
+- Exactly 3 suggestions.
+- Provide 1–3 realistic https links per suggestion. Prefer reputable brands/retailers and general product/category pages if unsure.
+- Titles short; descriptions concise.
 """.strip()
 
 def persist_suggestion(question: str, sug: dict):
-    """Store each suggestion row; main_category uses categories.event or 'Uncategorized'."""
+    """
+    Store each suggestion. We keep `links` inside categories_json to avoid a DB migration.
+    """
     try:
         categories = sug.get("categories") or {}
+        links = _sanitize_links(sug.get("links", []))
+        if links:
+            categories = {**categories, "links": links}
+
         main_category = categories.get("event") or "Uncategorized"
         conn = sqlite3.connect("fashion.db")
         c = conn.cursor()
@@ -94,6 +164,7 @@ def persist_suggestion(question: str, sug: dict):
         conn.commit()
         conn.close()
     except Exception:
+        # best effort; do not crash on DB issues
         pass
 
 @app.route("/ask", methods=["POST"])
@@ -106,23 +177,25 @@ def ask():
 
     prompt = build_prompt(question, profile)
 
-    # Default triple suggestions if model fails
     fallback = {
         "suggestions": [
             {
                 "title": "Smart-casual base",
                 "suggestion": "Black slim denim, charcoal crew knit, clean white leather sneakers, and a light trench. Add a slim belt and a compact crossbody.",
                 "categories": {"event": "Smart casual", "season": "Fall", "style": "Minimal", "user_traits": {}},
+                "links": []
             },
             {
                 "title": "Dinner-ready",
                 "suggestion": "Dark chinos, cream ribbed polo, suede loafers, and a navy overshirt. Finish with a subtle metal watch.",
                 "categories": {"event": "Dinner", "season": "Fall", "style": "Smart casual", "user_traits": {}},
+                "links": []
             },
             {
                 "title": "Street polish",
                 "suggestion": "Grey pleated trousers, black tee, cropped bomber, and retro runners. Socks just visible; tote or mini backpack.",
                 "categories": {"event": "Casual", "season": "Fall", "style": "Streetwear", "user_traits": {}},
+                "links": []
             },
         ]
     }
@@ -130,26 +203,51 @@ def ask():
     try:
         model = genai.GenerativeModel(MODEL_NAME)
         resp = model.generate_content(prompt)
-        parsed = extract_json(resp.text or "") or {}
+        parsed = extract_json(getattr(resp, "text", "") or "") or {}
 
         suggestions = parsed.get("suggestions")
         if not isinstance(suggestions, list) or len(suggestions) == 0:
             suggestions = fallback["suggestions"]
         else:
-            # If the model returned more/less than 3, normalize to 3
-            suggestions = suggestions[:3] if len(suggestions) >= 3 else (suggestions + fallback["suggestions"])[:3]
+            # normalize to exactly 3
+            if len(suggestions) < 3:
+                suggestions = (suggestions + fallback["suggestions"])[:3]
+            elif len(suggestions) > 3:
+                suggestions = suggestions[:3]
 
-        # Persist each suggestion
+        clean_out = []
         for sug in suggestions:
-            persist_suggestion(question, sug)
+            s = dict(sug) if isinstance(sug, dict) else {}
 
-        return jsonify({"suggestions": suggestions})
+            # 1) sanitize model-provided links
+            good_links = _sanitize_links(s.get("links", []))
+
+            # 2) if none survived, build reliable retailer search links
+            if not good_links:
+                good_links = _sanitize_links(build_shop_links(s))
+
+            s["links"] = good_links
+
+            # persist what we return
+            persist_suggestion(question, s)
+            clean_out.append({
+                "title": s.get("title", "Suggested look"),
+                "suggestion": s.get("suggestion", ""),
+                "categories": s.get("categories") or {},
+                "links": s.get("links") or [],
+            })
+
+        return jsonify({"suggestions": clean_out})
 
     except Exception as e:
-        # Graceful fallback
+        # Fallback; still persist, and attach deterministic links
+        final = []
         for sug in fallback["suggestions"]:
-            persist_suggestion(question, sug)
-        return jsonify({"suggestions": fallback["suggestions"], "error": str(e)}), 200
+            s = dict(sug)
+            s["links"] = _sanitize_links(build_shop_links(s))
+            persist_suggestion(question, s)
+            final.append(s)
+        return jsonify({"suggestions": final, "error": str(e)}), 200
 
 @app.route("/categories", methods=["GET"])
 def categories():
@@ -170,15 +268,15 @@ def history(category):
     )
     rows = c.fetchall()
     conn.close()
-    history = [
-        {
+    history = []
+    for r in rows:
+        cats = json.loads(r[2]) if r[2] else {}
+        history.append({
             "question": r[0],
             "suggestion": r[1],
-            "categories": json.loads(r[2]) if r[2] else {},
+            "categories": cats,  # may include "links"
             "timestamp": r[3],
-        }
-        for r in rows
-    ]
+        })
     return jsonify(history)
 
 if __name__ == "__main__":
